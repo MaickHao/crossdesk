@@ -1,0 +1,51 @@
+name: macOS wake test package
+
+on:
+  push:
+    branches: [build/macos-wake-on-share]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-arm64:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Run the display wake regression test
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror \
+            -Iapps/desktop/src/gui -Iapps/desktop/src/log \
+            apps/desktop/tests/macos_screen_sharing_power_test.cpp \
+            -framework CoreFoundation -framework IOKit \
+            -o "${RUNNER_TEMP}/macos_screen_sharing_power_test"
+          "${RUNNER_TEMP}/macos_screen_sharing_power_test"
+      - uses: ./.github/actions/ensure-xmake
+        with:
+          minimum-version: '3.1.1'
+      - name: Build and package CrossDesk
+        run: |
+          version="$(python3 scripts/version.py show desktop --field version)-20261126-1"
+          xmake f -m release --target_minver=14.0 --CROSSDESK_VERSION="$version" --USE_CUDA=false -vyD
+          xmake b -vy crossdesk
+          bash apps/desktop/scripts/macos/pkg_arm64.sh "$version"
+      - name: Validate the package payload
+        run: |
+          package="$(find . -maxdepth 1 -name 'crossdesk-macos-arm64-*.pkg' -print -quit)"
+          test -n "$package"
+          pkgutil --expand-full "$package" "${RUNNER_TEMP}/crossdesk-package"
+          app="$(find "${RUNNER_TEMP}/crossdesk-package" -type d -name CrossDesk.app -print -quit)"
+          test -n "$app"
+          bash apps/desktop/scripts/macos/verify_app.sh "$app" arm64
+          codesign --verify --deep --strict "$app"
+          shasum -a 256 "$package"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: crossdesk-macos-arm64-wake-test
+          path: crossdesk-macos-arm64-*.pkg
+          if-no-files-found: error
+          retention-days: 7
